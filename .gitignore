@@ -1,0 +1,6 @@
+.build/
+dist/
+.DS_Store
+
+# Local QA captures can contain the surrounding desktop and private windows.
+qa-*.png

@@ -1,0 +1,1 @@
+QJCSystemStatusApp.main()
