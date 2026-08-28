@@ -13,6 +13,6 @@ zsh scripts/package_app.sh
 open "dist/QJC System Status.app"
 ```
 
-릴리스 zip을 바로 받으려면 [QJC-System-Status-1.0.0.zip](https://github.com/qjc-office/qjc-system-status/releases/download/v1.0.0/QJC-System-Status-1.0.0.zip)을 사용하세요.
+릴리스 zip을 바로 받으려면 [QJC-System-Status-1.0.1.zip](https://github.com/qjc-office/qjc-system-status/releases/download/v1.0.1/QJC-System-Status-1.0.1.zip)을 사용하세요.
 
 자세한 기능과 개발 명령은 [README.md](README.md)를 참고하세요.

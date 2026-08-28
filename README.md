@@ -27,7 +27,7 @@ CPU·RAM·SSD 사용량을 메뉴바에서 2초마다 갱신합니다. 값은 Ma
 
 ### 릴리스 설치
 
-1. [Releases](https://github.com/qjc-office/qjc-system-status/releases/latest)에서 `QJC-System-Status-1.0.0.zip`을 받습니다.
+1. [Releases](https://github.com/qjc-office/qjc-system-status/releases/latest)에서 `QJC-System-Status-1.0.1.zip`을 받습니다.
 2. 압축을 풀고 `QJC System Status.app`을 `Applications`로 옮깁니다.
 3. 앱을 실행한 뒤 메뉴바의 `CPU · RAM · SSD` 표시를 클릭합니다.
 
