@@ -86,6 +86,14 @@ enum MetricValue {
     static func status(for fraction: Double) -> MetricStatus {
         switch fraction { case 0.85...: return .critical; case 0.65..<0.85: return .watch; default: return .normal }
     }
+    static func statusTitle(for fraction: Double?, language: AppLanguage = .current) -> String {
+        guard let fraction else { return L10n.text("unavailable", language: language) }
+        switch status(for: fraction) {
+        case .normal: return L10n.text("stable", language: language)
+        case .watch: return L10n.text("watch", language: language)
+        case .critical: return L10n.text("critical", language: language)
+        }
+    }
 }
 
 enum ByteFormatter {
@@ -184,7 +192,10 @@ struct MetricCard: View {
     let fraction: Double?
     let icon: String
     let tint: Color
-    private var status: MetricStatus { MetricValue.status(for: fraction ?? 0) }
+    private var statusColor: Color {
+        guard let fraction else { return .white.opacity(0.5) }
+        return MetricValue.status(for: fraction).color
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -206,7 +217,7 @@ struct MetricCard: View {
             HStack {
                 Text(detail).font(.system(size: 11, weight: .medium, design: .rounded)).foregroundStyle(.white.opacity(0.5))
                 Spacer()
-                Text(status.title).font(.system(size: 10, weight: .bold, design: .rounded)).foregroundStyle(status.color)
+                Text(MetricValue.statusTitle(for: fraction)).font(.system(size: 10, weight: .bold, design: .rounded)).foregroundStyle(statusColor)
             }
         }
         .padding(16)
@@ -290,6 +301,8 @@ enum SelfTest {
         precondition(MetricValue.status(for: 0.42) == .normal)
         precondition(MetricValue.status(for: 0.72) == .watch)
         precondition(MetricValue.status(for: 0.92) == .critical)
+        precondition(MetricValue.statusTitle(for: nil, language: .korean) == "읽을 수 없음")
+        precondition(MetricValue.statusTitle(for: nil, language: .english) == "Unavailable")
         precondition(ByteFormatter.string(bytes: 512 * 1024 * 1024) == "512 MB")
         precondition(ByteFormatter.string(bytes: 2 * 1024 * 1024 * 1024) == "2.0 GB")
         let fallback = SystemSnapshot(cpu: nil, memory: nil, disk: nil, capturedAt: .now)
