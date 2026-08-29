@@ -1,18 +1,13 @@
-# QJC System Status (한국어 안내)
+# QJC System Status 한국어 설치 안내
 
-Mac 메뉴바에서 CPU·RAM·SSD 사용량을 2초마다 보여주는 로컬 시스템 모니터입니다. macOS 기본 언어를 자동 감지하며, 한국어·영어·일본어·중국어(간체/번체)·스페인어·프랑스어·독일어를 지원합니다. 그 외 언어는 영어로 표시합니다.
+개발 지식 없이 설치할 수 있습니다.
 
-소스 저장소: https://github.com/qjc-office/qjc-system-status
+1. [설치 파일 바로 받기](https://github.com/qjc-office/qjc-system-status/releases/download/v1.0.1/QJC-System-Status-1.0.1.zip)를 눌러 `QJC-System-Status-1.0.1.zip`을 받습니다.
+2. Finder의 `다운로드` 폴더에서 zip을 더블클릭합니다.
+3. `QJC System Status.app`을 `응용 프로그램` 폴더로 옮깁니다.
+4. 앱을 Control-클릭하고 `열기`를 선택합니다.
+5. 메뉴바의 `CPU · RAM · SSD` 숫자를 클릭합니다.
 
-최신 릴리스: https://github.com/qjc-office/qjc-system-status/releases/latest
+현재 다운로드 파일은 Apple Silicon Mac(M1 이상), macOS 13 이상을 지원합니다. 일반 더블클릭이 차단되면 `시스템 설정 → 개인정보 보호 및 보안 → 확인 없이 열기`를 사용하세요.
 
-## 빠른 시작
-
-```bash
-zsh scripts/package_app.sh
-open "dist/QJC System Status.app"
-```
-
-릴리스 zip을 바로 받으려면 [QJC-System-Status-1.0.1.zip](https://github.com/qjc-office/qjc-system-status/releases/download/v1.0.1/QJC-System-Status-1.0.1.zip)을 사용하세요.
-
-자세한 기능과 개발 명령은 [README.md](README.md)를 참고하세요.
+제품 화면, 자세한 기능, 자주 묻는 질문은 [메인 README](README.md)를 확인하세요.
