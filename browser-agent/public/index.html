@@ -46,6 +46,13 @@
   #screen img { max-width: 100%; max-height: 40vh; border-radius: 8px; border: 1px solid var(--line); }
   form { display: flex; gap: 8px; padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--panel); }
   textarea { flex: 1; resize: none; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 9px 12px; max-height: 160px; }
+  .msg a { color: inherit; font-weight: 600; }
+  #chips { display: none; flex-wrap: wrap; gap: 6px; padding: 8px 16px 0; background: var(--panel); border-top: 1px solid var(--line); }
+  #chips.on { display: flex; }
+  #chips.on + form { border-top: 0; }
+  .chip { font-size: 12px; padding: 3px 8px 3px 10px; border-radius: 99px; background: var(--line); display: inline-flex; align-items: center; gap: 4px; max-width: 100%; }
+  .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip button { border: 0; background: none; padding: 0 4px; color: var(--muted); }
   .empty { margin: auto; color: var(--muted); text-align: center; font-size: 14px; }
 </style>
 </head>
@@ -58,7 +65,10 @@
 </header>
 <div id="screen"><img id="screenImg" alt="에이전트 브라우저 화면"></div>
 <main id="log"><div class="empty" id="empty">무엇을 해 드릴까요?<br>예: "네이버 스마트스토어에서 오늘 주문 확인해 줘"</div></main>
+<div id="chips"></div>
 <form id="form">
+  <input id="fileInput" type="file" multiple hidden>
+  <button id="attachBtn" type="button" title="파일 첨부" aria-label="파일 첨부">첨부</button>
   <textarea id="input" rows="1" placeholder="할 일을 적어 주세요" autocomplete="off"></textarea>
   <button class="primary" type="submit">보내기</button>
 </form>
@@ -84,7 +94,16 @@ function addMessage(m) {
   seen.add(m.id);
   $("empty")?.remove();
   if (m.role !== "user") endProgress();
-  const box = el("div", `msg ${m.role}`, m.text);
+  const box = el("div", `msg ${m.role}`);
+  // 보관함 파일 주소는 누를 수 있는 링크로 바꾼다.
+  for (const part of m.text.split(/(\/api\/files\/f_[a-f0-9]{12})/)) {
+    if (/^\/api\/files\/f_[a-f0-9]{12}$/.test(part)) {
+      const a = el("a", "", "여기를 눌러 받기");
+      a.href = part;
+      a.setAttribute("download", "");
+      box.appendChild(a);
+    } else if (part) box.appendChild(document.createTextNode(part));
+  }
   box.appendChild(el("span", "time", fmtTime(m.created)));
   log.appendChild(box);
   scrollDown();
@@ -162,8 +181,25 @@ async function decideApproval(id, decision) {
 }
 
 // 보낼 때 id를 먼저 만든다. 네트워크가 끊겨 다시 보내도 서버가 같은 메시지를 한 번만 처리한다.
-async function sendMessage(text) {
+async function sendMessage(text, files = []) {
   const msg = { id: crypto.randomUUID().replace(/-/g, ""), seq: Date.now() * 1000 + (seqCounter++ % 1000), text };
+  if (files.length) {
+    try {
+      msg.files = [];
+      for (const f of files) {
+        const res = await fetch(`/api/files?name=${encodeURIComponent(f.name)}`, {
+          method: "POST",
+          headers: { "content-type": "application/octet-stream", "x-agent-client": "1" },
+          body: f,
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+        msg.files.push((await res.json()).id);
+      }
+    } catch (e) {
+      addMessage({ id: "err_" + msg.id, role: "notice", text: `파일 올리기 실패: ${e.message}. 다시 보내 주세요.`, created: Date.now() });
+      return;
+    }
+  }
   for (let attempt = 0; attempt < 4; attempt++) {
     try { await post("/api/messages", msg); return; }
     catch (e) {
@@ -176,10 +212,38 @@ async function sendMessage(text) {
 $("form").addEventListener("submit", (e) => {
   e.preventDefault();
   const text = $("input").value.trim();
-  if (!text) return;
+  if (!text && !picked.length) return;
+  const files = picked.splice(0, picked.length);
+  renderChips();
   $("input").value = "";
   autosize();
-  sendMessage(text);
+  sendMessage(text, files);
+});
+// 첨부할 파일 (보내기 전까지 여기에 모아 둔다)
+const picked = [];
+const MAX_FILE_MB = 25;
+function renderChips() {
+  const box = $("chips");
+  box.replaceChildren();
+  box.classList.toggle("on", picked.length > 0);
+  picked.forEach((f, i) => {
+    const chip = el("span", "chip");
+    chip.appendChild(el("span", "", f.name));
+    const x = el("button", "", "×"); x.type = "button"; x.setAttribute("aria-label", `${f.name} 빼기`);
+    x.onclick = () => { picked.splice(i, 1); renderChips(); };
+    chip.appendChild(x);
+    box.appendChild(chip);
+  });
+}
+$("attachBtn").onclick = () => $("fileInput").click();
+$("fileInput").addEventListener("change", () => {
+  for (const f of $("fileInput").files) {
+    if (f.size > MAX_FILE_MB * 1024 * 1024) { alert(`${f.name}: 파일이 너무 커요 (${MAX_FILE_MB}MB까지)`); continue; }
+    if (picked.length >= 5) { alert("파일은 한 번에 5개까지 붙일 수 있어요"); break; }
+    picked.push(f);
+  }
+  $("fileInput").value = "";
+  renderChips();
 });
 $("input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing && window.matchMedia("(pointer: fine)").matches) {

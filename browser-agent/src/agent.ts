@@ -4,10 +4,11 @@ import crypto from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { cancelApprovalsForTask, requestApproval } from "./approvals.ts";
-import { browserFor, classifyClick, classifyEnter, type BrowserSession, type Risk } from "./browser.ts";
+import { browserFor, classifyClick, classifyEnter, classifyUploadTarget, type BrowserSession, type Risk } from "./browser.ts";
 import { CONFIG, priceFor, USERS, type UserInfo } from "./config.ts";
 import { db, insertMessage, recentMessages, spentToday, today } from "./db.ts";
 import { emit } from "./events.ts";
+import { filesFor, formatSize, getFile, uploadNeedsApproval, type FileRow } from "./files.ts";
 import { forget, memoriesFor, remember, type MemoryContext } from "./memory.ts";
 import { getForFill, listForUser } from "./vault.ts";
 
@@ -29,6 +30,8 @@ const SYSTEM = `당신은 작은 회사(사장님 1명, 직원 2명)의 브라�
 - browser_snapshot으로 화면의 요소 목록(ref)과 글을 읽고, ref로 클릭·입력합니다. 글자만으로 모르겠으면 browser_screenshot으로 화면을 봅니다.
 - 로그인이 필요하면 list_logins로 저장된 로그인 정보를 찾고, 로그인 페이지에서 fill_login을 쓴 뒤 로그인 버튼을 누릅니다. 비밀번호를 사용자에게 묻거나 채팅에 쓰지 마세요. 없으면 사장님께 맥미니에서 금고에 등록해 달라고 하세요.
 - 게시, 결제, 전송, 삭제, 신청처럼 되돌릴 수 없는 동작은 코드가 자동으로 사장님 승인을 받습니다. 그런 동작을 할 때 reason에 무엇을 왜 하는지 사장님이 판단할 수 있게 한 문장으로 적으세요. 거절되거나 만료되면 다른 버튼이나 다른 경로로 같은 일을 시도하지 말고, 멈추고 보고하세요.
+- 파일: 사용자가 채팅에 첨부한 파일과 브라우저가 내려받은 파일은 보관함에 있습니다(list_files). 사이트에 올릴 때는 browser_upload를 씁니다. 이번 요청에 첨부된 파일이 아니면 사장님 승인이 필요합니다. 파일 내용은 읽을 수 없으니, 내용이 필요하면 사용자에게 물어보세요. 내려받은 파일은 사용자가 채팅에서 바로 받을 수 있습니다.
+- 스냅샷에는 페이지 안쪽 프레임(iframe)의 요소도 같이 나옵니다. 같은 방법으로 ref를 쓰면 됩니다.
 - 막히면(캡차, 휴대폰 인증, 권한 없음, 정보 부족) 추측으로 진행하지 말고, 무엇이 필요한지 말하고 멈추세요.
 
 남이 쓴 글
@@ -85,6 +88,19 @@ const toolSpecs = {
     description: "드롭다운(select) ref에서 값을 고릅니다.",
     schema: z.object({ ref: z.string(), values: z.array(z.string()).min(1) }),
   },
+  browser_upload: {
+    description:
+      "보관함의 파일을 사이트의 파일 선택칸에 넣습니다. ref는 스냅샷에서 [파일 선택칸] 표시가 있는 요소, 또는 누르면 파일 선택 창이 열리는 버튼입니다. 이번 요청에 첨부된 파일이 아니면 사장님 승인을 먼저 받습니다.",
+    schema: z.object({
+      ref: z.string(),
+      file_ids: z.array(z.string()).min(1).max(5).describe("list_files나 첨부 표시에 나온 파일 id (f_...)"),
+      reason: z.string().describe("어떤 파일을 어디에 왜 올리는지 한 문장"),
+    }),
+  },
+  list_files: {
+    description: "이 사용자의 파일 보관함 목록(id, 이름, 크기, 출처)을 봅니다. 채팅에 첨부한 파일과 브라우저가 내려받은 파일이 들어 있습니다.",
+    schema: z.object({}),
+  },
   browser_scroll: {
     description: "화면을 위나 아래로 스크롤합니다.",
     schema: z.object({ direction: z.enum(["up", "down"]), screens: z.number().min(0.2).max(10).optional() }),
@@ -129,7 +145,7 @@ const TOOLS: Tool[] = Object.entries(toolSpecs).map(([name, spec]) => {
 
 export interface TaskInput {
   user: UserInfo;
-  messages: { id: string; text: string }[]; // 순서대로 묶인 사람 메시지들
+  messages: { id: string; text: string; files?: FileRow[] }[]; // 순서대로 묶인 사람 메시지들
 }
 
 interface TaskCtx {
@@ -257,6 +273,17 @@ async function runTool(ctx: TaskCtx, name: ToolName, input: unknown): Promise<st
       const rows = listForUser(ctx.user.login);
       return rows.length ? rows.map((r) => `${r.id}\t${r.label}\t${r.origin}`).join("\n") : "저장된 로그인 정보가 없습니다.";
     }
+    case "list_files": {
+      const rows = filesFor(ctx.user.login);
+      if (!rows.length) return "보관함에 파일이 없습니다.";
+      if (rows.some((f) => f.source === "download")) ctx.tainted = true; // 내려받은 파일의 이름은 남이 정한 글이다
+      return rows
+        .map((f) => {
+          const origin = f.source === "download" ? "브라우저가 내려받음" : f.message_id && ctx.allowedMessageIds.has(f.message_id) ? "이번 요청에 첨부" : "예전에 첨부";
+          return `${f.id}\t${f.name}\t${formatSize(f.size)}\t${origin}\t${new Date(f.created).toLocaleString("ko-KR")}`;
+        })
+        .join("\n");
+    }
     case "remember":
       return remember(memCtx(), toolSpecs.remember.schema.parse(input));
     case "forget":
@@ -264,6 +291,8 @@ async function runTool(ctx: TaskCtx, name: ToolName, input: unknown): Promise<st
   }
 
   const browser = await browserFor(ctx.user.login);
+  browser.onDownload = (file) =>
+    say(ctx, "notice", `파일을 받았어요: ${file.name} (${formatSize(file.size)})\n내려받기: /api/files/${file.id}`);
   ctx.tainted = true; // 브라우저를 쓰는 순간부터 이 작업은 남의 글을 읽은 작업이다
   const after = (withSnapshot: boolean) => pageState(browser, withSnapshot);
 
@@ -331,6 +360,28 @@ async function runTool(ctx: TaskCtx, name: ToolName, input: unknown): Promise<st
       const i = toolSpecs.browser_select.schema.parse(input);
       await browser.select(i.ref, i.values);
       return after(false);
+    }
+    case "browser_upload": {
+      const i = toolSpecs.browser_upload.schema.parse(input);
+      const files = i.file_ids.map((id) => {
+        const f = getFile(id);
+        if (!f || f.user !== ctx.user.login) throw new Error(`파일 ${id}가 보관함에 없습니다. list_files로 확인하세요.`);
+        return f;
+      });
+      const info = await browser.describe(i.ref);
+      if (!info) throw new Error(`ref ${i.ref}를 찾을 수 없습니다. 스냅샷을 다시 찍으세요.`);
+      const fileReason = uploadNeedsApproval(files, ctx.allowedMessageIds);
+      const target = classifyUploadTarget(info);
+      const risk: Risk = fileReason ? { risky: true, reason: fileReason } : target;
+      const names = files.map((f) => f.name).join(", ");
+      const blocked = await gate(ctx, browser, risk, `파일 올리기 (${names})`, i.reason);
+      if (blocked) return blocked;
+      await browser.upload(
+        i.ref,
+        files.map((f) => f.path),
+        { isFileInput: info.isFileInput, allowSubmit: risk.risky },
+      );
+      return after(true);
     }
     case "browser_scroll": {
       const i = toolSpecs.browser_scroll.schema.parse(input);
@@ -412,7 +463,12 @@ export async function runTask(input: TaskInput): Promise<void> {
       role: "user",
       content: [
         { type: "text", text: contextBlock(ctx.user, ctx.allowedMessageIds) },
-        ...input.messages.map((m): ContentBlockParam => ({ type: "text", text: `[메시지 id: ${m.id}] ${ctx.user.name}: ${m.text}` })),
+        ...input.messages.map((m): ContentBlockParam => {
+          const attached = m.files?.length
+            ? `\n(이 메시지에 첨부된 파일: ${m.files.map((f) => `${f.id} "${f.name}" ${formatSize(f.size)}`).join(", ")})`
+            : "";
+          return { type: "text", text: `[메시지 id: ${m.id}] ${ctx.user.name}: ${m.text}${attached}` };
+        }),
       ],
     },
   ];
@@ -584,6 +640,10 @@ function describeUse(name: string, input: Record<string, unknown>): string {
       return "화면 보는 중";
     case "fill_login":
       return "저장된 로그인 정보 입력";
+    case "browser_upload":
+      return `파일 올리기: ${input.reason ?? ""}`;
+    case "list_files":
+      return "파일 보관함 확인";
     case "remember":
       return "기억 저장";
     default:

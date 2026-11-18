@@ -7,8 +7,9 @@ import { overallLimitReached, runTask, stopTask } from "./agent.ts";
 import { decide, parseApprovalCommand, pendingApprovals } from "./approvals.ts";
 import { closeAllBrowsers, openedBrowser } from "./browser.ts";
 import { CONFIG, ROOT, USERS, type UserInfo } from "./config.ts";
-import { db, insertMessage, markInterruptedTasks, recentMessages } from "./db.ts";
+import { db, getMessage, insertMessage, markInterruptedTasks, recentMessages } from "./db.ts";
 import { bus, emit, type AgentEvent } from "./events.ts";
+import { attachToMessage, claimable, getFile, MAX_UPLOAD_BYTES, saveUpload, type FileRow } from "./files.ts";
 import { redact } from "./redact.ts";
 
 const INDEX = path.join(ROOT, "public", "index.html");
@@ -26,9 +27,9 @@ function identify(req: http.IncomingMessage): UserInfo | null {
 }
 
 // 다른 사이트가 사용자 브라우저를 통해 몰래 명령을 보내지 못하게(CSRF): JSON + 같은 출처 + 전용 헤더만 받는다.
-function sameOrigin(req: http.IncomingMessage): boolean {
+function sameOrigin(req: http.IncomingMessage, contentType = "application/json"): boolean {
   if (req.headers["x-agent-client"] !== "1") return false;
-  if (!(req.headers["content-type"] ?? "").startsWith("application/json")) return false;
+  if (!(req.headers["content-type"] ?? "").startsWith(contentType)) return false;
   const origin = req.headers.origin;
   if (!origin) return true;
   try {
@@ -54,12 +55,24 @@ async function readJson(req: http.IncomingMessage): Promise<Record<string, unkno
   return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as Record<string, unknown>;
 }
 
+async function readBytes(req: http.IncomingMessage, limit: number): Promise<Buffer | null> {
+  let size = 0;
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size > limit) return null;
+    chunks.push(chunk as Buffer);
+  }
+  return Buffer.concat(chunks);
+}
+
 // ---- 사람별 대기열 (함정 하나: 순서, 둘: 중복) ----
 
 interface Pending {
   id: string;
   seq: number;
   text: string;
+  files: FileRow[];
 }
 
 const queues = new Map<string, { items: Pending[]; timer: NodeJS.Timeout | null; running: boolean }>();
@@ -89,7 +102,7 @@ function schedule(user: UserInfo) {
     if (q.running || q.items.length === 0) return;
     const batch = q.items.splice(0, q.items.length);
     q.running = true;
-    runTask({ user, messages: batch.map((b) => ({ id: b.id, text: b.text })) })
+    runTask({ user, messages: batch.map((b) => ({ id: b.id, text: b.text, files: b.files })) })
       .catch((err) => console.error("[task] crashed", err))
       .finally(() => {
         q.running = false;
@@ -111,15 +124,23 @@ async function handleMessage(user: UserInfo, body: Record<string, unknown>) {
   const id = typeof body.id === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(body.id) ? body.id : null;
   const seq = typeof body.seq === "number" ? body.seq : Date.now();
   const raw = typeof body.text === "string" ? body.text.trim() : "";
-  if (!id || !raw) return { status: 400, body: { error: "id와 text가 필요해요" } };
+  const fileIds = Array.isArray(body.files) ? body.files.filter((f): f is string => typeof f === "string") : [];
+  if (!id || (!raw && fileIds.length === 0)) return { status: 400, body: { error: "id와 text가 필요해요" } };
   if (raw.length > 4000) return { status: 400, body: { error: "메시지가 너무 길어요 (4000자까지)" } };
+  if (getMessage(id)) return { status: 200, body: { duplicate: true } }; // 같은 메시지가 두 번 왔다
+  const files = claimable(user.login, fileIds);
+  if (typeof files === "string") return { status: 400, body: { error: files } };
 
   // 결정 둘: 카드번호·비밀번호는 저장 전에 가린다. 가린 원문은 어디에도 남지 않는다.
-  const { text, redacted } = redact(raw);
+  const redactedRaw = redact(raw || "첨부한 파일을 확인해 주세요.");
+  const redacted = redactedRaw.redacted;
+  // 화면과 대화 기록에서 무엇을 첨부했는지 보이게 이름을 덧붙인다.
+  const text = files.length ? `${redactedRaw.text}\n[첨부: ${files.map((f) => f.name).join(", ")}]` : redactedRaw.text;
   const created = Date.now();
   if (!insertMessage({ id, user: user.login, role: "user", text, task_id: null, created })) {
     return { status: 200, body: { duplicate: true } }; // 같은 메시지가 두 번 왔다
   }
+  attachToMessage(files, id);
   emit({ type: "message", user: user.login, id, role: "user", text, created });
   if (redacted.length) {
     notice(user, `보안을 위해 ${[...new Set(redacted)].join(", ")}을(를) 가리고 저장했어요. 사이트 비밀번호는 맥미니에서 금고에 등록해 주세요.`);
@@ -140,7 +161,7 @@ async function handleMessage(user: UserInfo, body: Record<string, unknown>) {
     notice(user, "지금은 요청이 많아서 처리할 수 없어요. 내일 다시 시켜 주세요.");
     return { status: 200, body: { ok: true } };
   }
-  enqueue(user, { id, seq, text });
+  enqueue(user, { id, seq, text, files: files.map((f) => ({ ...f, message_id: id })) });
   if (queueFor(user.login).running) notice(user, "지금 하던 작업이 끝나면 바로 이어서 할게요.");
   return { status: 200, body: { ok: true } };
 }
@@ -203,6 +224,32 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { "content-type": "image/jpeg", "cache-control": "no-store" });
       res.end(shot);
       return;
+    }
+    const fileMatch = /^\/api\/files\/(f_[a-f0-9]{12})$/.exec(url.pathname);
+    if (req.method === "GET" && fileMatch) {
+      // 보관함의 파일 받기. 본인 파일만, 사장님은 모두.
+      const file = getFile(fileMatch[1]);
+      if (!file || (file.user !== user.login && user.role !== "owner") || !fs.existsSync(file.path)) return send(res, 404, { error: "파일이 없어요" });
+      res.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "content-length": String(file.size),
+        "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+        "x-content-type-options": "nosniff",
+        "cache-control": "no-store",
+      });
+      fs.createReadStream(file.path).pipe(res);
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/files") {
+      // 채팅 첨부. 파일 내용을 그대로 본문으로 받는다.
+      if (!sameOrigin(req, "application/octet-stream")) return send(res, 403, { error: "잘못된 요청 출처" });
+      const name = (url.searchParams.get("name") ?? "").trim();
+      if (!name) return send(res, 400, { error: "파일 이름이 필요해요" });
+      const data = await readBytes(req, MAX_UPLOAD_BYTES);
+      if (!data) return send(res, 413, { error: `파일이 너무 커요 (${MAX_UPLOAD_BYTES / 1024 / 1024}MB까지)` });
+      if (data.length === 0) return send(res, 400, { error: "빈 파일이에요" });
+      const file = saveUpload(user.login, name, data);
+      return send(res, 200, { id: file.id, name: file.name, size: file.size });
     }
     if (req.method === "POST") {
       if (!sameOrigin(req)) return send(res, 403, { error: "잘못된 요청 출처" });

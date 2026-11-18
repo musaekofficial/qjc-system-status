@@ -36,7 +36,7 @@ test("카드번호·비밀번호·주민번호를 가린다", () => {
 
 const base = {
   ref: "1-1", tag: "button", type: "submit", role: "", name: "", href: "", inForm: true, formMethod: "post",
-  formHasPassword: false, isSubmit: true, isPassword: false, searchLike: false, editable: false,
+  formHasPassword: false, isSubmit: true, isPassword: false, isFileInput: false, searchLike: false, editable: false,
 };
 
 test("되돌릴 수 없는 클릭은 위험으로 분류한다", () => {
