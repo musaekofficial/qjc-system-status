@@ -507,7 +507,8 @@ export async function runTask(input: TaskInput): Promise<void> {
           model: CONFIG.model,
           max_tokens: 32000,
           betas,
-          system: SYSTEM,
+          // 시스템 프롬프트와 도구 목록은 작업이 바뀌어도 같으니 여기서 한 번 끊어 캐시한다(작업 사이 적중용).
+          system: [{ type: "text" as const, text: SYSTEM, cache_control: { type: "ephemeral" as const } }],
           tools: TOOLS,
           messages,
           cache_control: { type: "ephemeral" },

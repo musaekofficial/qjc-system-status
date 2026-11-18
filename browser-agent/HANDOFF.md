@@ -25,7 +25,10 @@
   - `npm run typecheck`가 통과합니다.
   - `npm test`는 17개 모두 통과합니다. 끝-끝 테스트는 가짜 Claude API(SSE를 흉내 내는 서버), 테스트용 게시판, 실제 headless Chromium으로 돌립니다. `test/browser.test.ts`는 AI 없이 브라우저 기능(프레임, shadow DOM, 올리기, 내려받기)만 확인해요.
   - 두 번째 세션에서 `agent.ts`의 요청 파라미터(`fallbacks: "default"`, `thinking.display: "updates"`, `context_management`, top-level `cache_control`, beta 헤더 세 개)를 API 참고 문서와 대조했고, 문서와 어긋나는 곳은 찾지 못했습니다. 그래도 실제 호출로 확인한 것은 아니에요.
-  - **진짜 Claude API로는 한 번도 돌려 보지 않았습니다.** 세션에 API 키가 없었어요. 맥미니에서 처음 돌릴 때 요청 파라미터에서 400 오류가 날 수 있습니다(5장 참고).
+  - **진짜 Claude API 첫 실행 통과(세 번째 세션, 2026-11-18, 맥미니).** `claude-opus-5-5`로 400 오류 없이 돌았습니다. `fallbacks`, `thinking.display: "updates"`, `context_management`, top-level `cache_control` 네 가지 모두 그대로 통과했어요.
+  - **캐시:** 처음에는 같은 작업 안에서만 적중하고 작업이 바뀌면 `cache_read`가 0이었습니다. `agent.ts`에서 `system`을 블록 배열로 바꾸고 `cache_control`을 붙여 고쳤고, 새 작업의 첫 호출에서도 4,085토큰이 읽히는 것을 확인했습니다(간단한 작업 $0.029 → $0.009).
+  - **실제 사이트 시험(로그인 없이):** 네이버 검색은 됨(검색칸 Enter 오탐 없음, 4단계 $0.27 — 화면이 커서 비쌈). 쿠팡 윙은 판매자 로그인 화면까지 읽음. 스마트스토어 공개 상점(`smartstore.naver.com/...`)은 headless에서는 "접속 불가" 오류 페이지, 실제 크롬(`BROWSER_CHANNEL=chrome`, 창 띄움)에서는 네이버 로그인 페이지로 넘어가 못 읽었습니다. 자동 조작 브라우저를 의심하는 것으로 보이고, 로그인된 프로필에서 달라지는지는 확인 못 했어요.
+  - **맥미니 환경:** Node는 Homebrew로 깔았습니다(v26.13.1, `/opt/homebrew/bin`). 저장소는 `~/qjc-system-status`. `.env`에 API 키가 들어 있고, `users.json`·launchd·`tailscale serve`는 아직 안 걸었습니다. 시험은 `DEV_LOGIN`과 임시 `USERS_FILE`·`DATA_DIR`로 했어요.
   - 채팅 화면은 폰 크기(390px)로 띄워서 확인했습니다. 비밀번호 가림과 오류 알림이 제대로 표시됩니다.
 
 ## 3. 파일 구성
@@ -69,8 +72,9 @@
 
 ## 5. 다음 할 일 (우선순위 순)
 
-1. **맥미니에서 진짜 API로 첫 실행.** `README.md`의 설치 순서대로 하고, 첫 요청이 400이면 오류 메시지를 보고 빼야 할 파라미터를 찾습니다. 의심 후보는 `agent.ts`의 `client.beta.messages.stream(...)` 안에 있는 `fallbacks`, `thinking.display: "updates"`, `context_management`, top-level `cache_control`입니다. 그다음 `usage.cache_read_input_tokens`가 0보다 큰지 보고 캐시가 맞는지 확인합니다.
-2. **실제 사이트로 시험.** 네이버, 쿠팡 윙, 스마트스토어 같은 사이트에서 위험 분류가 너무 자주 걸리는지, 반대로 빠지는 곳은 없는지 봅니다. 기준은 `browser.ts`의 `RISKY_WORDS`와 `classifyEnter`이고, 오탐과 미탐을 보면서 조정하면 됩니다.
+0. **(사용자 요청, 2026-11-18) 역할 분담으로 비용 줄이기.** 사용자가 메이커 에반 시즌 3 영상(https://youtu.be/sMgMRUc_De4)을 보내 왔고, 그중 브라우저 비서에 맞는 것을 이 순서로 하기로 했습니다: ① 모델 나누기(클릭·읽기 단계는 싼 모델) ② 사장님이 고치거나 거절한 기록(최근 60일, 8개)을 다음 작업 지시문에 넣기 ③ 지우는 규칙(대화 1년, 진행 기록 90일, 파일 보관함). 영상의 반응 점수·레시피·브랜드 추정·경쟁사 루틴은 SNS 게시용이라 이 비서에는 넣지 않습니다.
+1. **(끝남) 맥미니에서 진짜 API로 첫 실행.** `README.md`의 설치 순서대로 하고, 첫 요청이 400이면 오류 메시지를 보고 빼야 할 파라미터를 찾습니다. 의심 후보는 `agent.ts`의 `client.beta.messages.stream(...)` 안에 있는 `fallbacks`, `thinking.display: "updates"`, `context_management`, top-level `cache_control`입니다. 그다음 `usage.cache_read_input_tokens`가 0보다 큰지 보고 캐시가 맞는지 확인합니다.
+2. **실제 사이트로 시험(로그인 화면은 아직).** 로그인 없는 화면은 2장 결과 참고. 남은 것은 사용자가 금고나 비서 브라우저 창에서 직접 로그인한 뒤의 화면입니다. 네이버, 쿠팡 윙, 스마트스토어 같은 사이트에서 위험 분류가 너무 자주 걸리는지, 반대로 빠지는 곳은 없는지 봅니다. 기준은 `browser.ts`의 `RISKY_WORDS`와 `classifyEnter`이고, 오탐과 미탐을 보면서 조정하면 됩니다.
 3. **먼저 말 거는 기능(영상 9장).** 아직 넣지 않았습니다. 영상의 방향은 "매시간 깨어나서, 제안할 거리는 코드가 고르고, AI는 문장만 쓴다"입니다. 하루 횟수, 밤 시간대, 사장님이 거절했을 때 얼마나 참을지를 규칙으로 정해야 해요.
 4. **파일 기능을 실제 사이트에서 확인.** 올리기·내려받기는 테스트 페이지에서만 확인했습니다. 스마트스토어 상품 사진 등록처럼 끌어다 놓기(drag and drop)만 받는 화면이 있으면 따로 손봐야 해요. 비서가 파일 내용을 읽는 기능(엑셀 주문 목록 요약 등)도 아직 없습니다.
 5. **(선택) 승인 알림.** 사장님 폰으로 푸시가 가게 하면 좋습니다. 지금은 채팅 화면을 열어 둬야 승인 카드가 보여요.
