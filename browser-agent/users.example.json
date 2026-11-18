@@ -1,0 +1,5 @@
+{
+  "owner@example.com": { "name": "사장님", "role": "owner" },
+  "staff1@example.com": { "name": "직원1", "role": "staff" },
+  "staff2@example.com": { "name": "직원2", "role": "staff" }
+}

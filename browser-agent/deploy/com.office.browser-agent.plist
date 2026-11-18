@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- 맥미니에 로그인하면 에이전트를 자동으로 켜고, 죽으면 다시 켠다.
+     PROJECT_DIR와 NODE_PATH를 실제 경로로 바꾼 뒤 ~/Library/LaunchAgents/ 에 복사한다. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.office.browser-agent</string>
+  <key>WorkingDirectory</key><string>PROJECT_DIR</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>NODE_PATH</string>
+    <string>--disable-warning=ExperimentalWarning</string>
+    <string>src/server.ts</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>PROJECT_DIR/data/agent.log</string>
+  <key>StandardErrorPath</key><string>PROJECT_DIR/data/agent.log</string>
+</dict>
+</plist>

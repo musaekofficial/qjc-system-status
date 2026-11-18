@@ -1,0 +1,25 @@
+{
+  "name": "browser-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Tailscale-only browser agent for a small team, running on a Mac mini",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/server.ts",
+    "vault": "node --disable-warning=ExperimentalWarning src/vault-cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.10.0",
+    "playwright": "^1.63.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  }
+}

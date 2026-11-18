@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>사무실 비서</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e3e2dd;
+    --me: #2f5bd3; --me-text: #ffffff; --bot: #ffffff; --notice: #8a6a12; --notice-bg: #fbf3dc;
+    --ok: #1f7a4d; --danger: #b3261e; --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #141413; --panel: #1f1f1d; --text: #ecebe6; --muted: #9b9a94; --line: #33322f;
+      --me: #4a74e6; --bot: #262624; --notice: #e6c062; --notice-bg: #2c2717; --ok: #4fbf86; --danger: #ef7a72; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; }
+  body { display: flex; flex-direction: column; height: 100dvh; }
+  header { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 16px; margin: 0; flex: 1; }
+  .pill { font-size: 12px; padding: 3px 10px; border-radius: 99px; background: var(--line); color: var(--muted); white-space: nowrap; }
+  .pill.running { background: #dfe8ff; color: #2448a8; }
+  .pill.waiting_approval { background: var(--notice-bg); color: var(--notice); }
+  button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 10px; padding: 6px 12px; cursor: pointer; }
+  button.primary { background: var(--me); border-color: var(--me); color: var(--me-text); }
+  button.ok { background: var(--ok); border-color: var(--ok); color: #fff; }
+  button.danger { color: var(--danger); }
+  main { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: min(560px, 85%); padding: 9px 13px; border-radius: var(--radius); white-space: pre-wrap; word-break: break-word; }
+  .msg.user { align-self: flex-end; background: var(--me); color: var(--me-text); border-bottom-right-radius: 4px; }
+  .msg.assistant { align-self: flex-start; background: var(--bot); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .msg.notice { align-self: center; background: var(--notice-bg); color: var(--notice); font-size: 13px; max-width: 92%; }
+  .time { display: block; font-size: 11px; opacity: .6; margin-top: 2px; }
+  .progress { align-self: flex-start; font-size: 13px; color: var(--muted); border-left: 2px solid var(--line); padding: 2px 10px; max-width: 92%; }
+  .progress div { white-space: pre-wrap; }
+  .card { align-self: stretch; border: 1px solid var(--notice); background: var(--panel); border-radius: var(--radius); padding: 12px 14px; }
+  .card h3 { margin: 0 0 6px; font-size: 15px; }
+  .card pre { margin: 0 0 8px; white-space: pre-wrap; font: inherit; font-size: 13px; color: var(--muted); }
+  .card img { width: 100%; border-radius: 8px; border: 1px solid var(--line); margin-bottom: 8px; }
+  .card .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .card .left { font-size: 12px; color: var(--muted); margin-left: auto; }
+  .card.done { border-color: var(--line); opacity: .7; }
+  #screen { display: none; padding: 0 16px 8px; }
+  #screen img { max-width: 100%; max-height: 40vh; border-radius: 8px; border: 1px solid var(--line); }
+  form { display: flex; gap: 8px; padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--panel); }
+  textarea { flex: 1; resize: none; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 9px 12px; max-height: 160px; }
+  .empty { margin: auto; color: var(--muted); text-align: center; font-size: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">사무실 비서</h1>
+  <span id="status" class="pill">대기</span>
+  <button id="screenBtn" type="button" title="에이전트 브라우저 화면">화면</button>
+  <button id="stopBtn" type="button" class="danger">멈춤</button>
+</header>
+<div id="screen"><img id="screenImg" alt="에이전트 브라우저 화면"></div>
+<main id="log"><div class="empty" id="empty">무엇을 해 드릴까요?<br>예: "네이버 스마트스토어에서 오늘 주문 확인해 줘"</div></main>
+<form id="form">
+  <textarea id="input" rows="1" placeholder="할 일을 적어 주세요" autocomplete="off"></textarea>
+  <button class="primary" type="submit">보내기</button>
+</form>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const log = $("log");
+const seen = new Set();
+const cards = new Map();
+let me = null;
+let users = {};
+let seqCounter = 0;
+let progressEl = null;
+
+const STATUS = { running: "작업 중", waiting_approval: "승인 대기", done: "대기", failed: "대기", stopped: "대기", interrupted: "대기", queued: "대기열" };
+
+function fmtTime(ms) { return new Date(ms).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }); }
+function scrollDown() { log.scrollTop = log.scrollHeight; }
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+
+function addMessage(m) {
+  if (seen.has(m.id)) return;
+  seen.add(m.id);
+  $("empty")?.remove();
+  if (m.role !== "user") endProgress();
+  const box = el("div", `msg ${m.role}`, m.text);
+  box.appendChild(el("span", "time", fmtTime(m.created)));
+  log.appendChild(box);
+  scrollDown();
+}
+
+function addProgress(text) {
+  if (!progressEl) { progressEl = el("div", "progress"); log.appendChild(progressEl); }
+  progressEl.appendChild(el("div", "", "· " + text.slice(0, 400)));
+  while (progressEl.childElementCount > 12) progressEl.firstChild.remove();
+  scrollDown();
+}
+function endProgress() { progressEl = null; }
+
+function setStatus(s) {
+  const pill = $("status");
+  pill.className = "pill " + (s || "");
+  pill.textContent = STATUS[s] || "대기";
+}
+
+function renderApproval(a) {
+  let card = cards.get(a.id);
+  const pending = a.status === "pending";
+  if (!card) {
+    card = el("div", "card");
+    cards.set(a.id, card);
+    log.appendChild(card);
+  }
+  card.replaceChildren();
+  card.classList.toggle("done", !pending);
+  card.appendChild(el("h3", "", `#${a.id} 승인 요청`));
+  card.appendChild(el("div", "", a.summary));
+  card.appendChild(el("pre", "", a.detail));
+  if (pending) {
+    const img = el("img");
+    img.alt = "요청 당시 화면";
+    img.src = `/api/screenshot?user=${encodeURIComponent(a.requestedFor || a.requested_for)}&t=${Date.now()}`;
+    img.onerror = () => img.remove();
+    card.appendChild(img);
+  }
+  const actions = el("div", "actions");
+  if (pending && me?.role === "owner") {
+    const ok = el("button", "ok", "승인"); ok.type = "button";
+    const no = el("button", "danger", "거절"); no.type = "button";
+    ok.onclick = () => decideApproval(a.id, "approved");
+    no.onclick = () => decideApproval(a.id, "rejected");
+    actions.append(ok, no);
+  }
+  const labels = { pending: "", approved: "승인됨", rejected: "거절됨", expired: "만료됨" };
+  const left = el("span", "left", labels[a.status] ?? a.status);
+  if (pending) {
+    const tick = () => {
+      const s = Math.max(0, Math.round((a.expires - Date.now()) / 1000));
+      left.textContent = `${Math.floor(s / 60)}분 ${s % 60}초 남음`;
+      if (s > 0 && cards.get(a.id) === card && !card.classList.contains("done")) setTimeout(tick, 1000);
+    };
+    tick();
+  }
+  actions.appendChild(left);
+  card.appendChild(actions);
+  scrollDown();
+}
+
+async function post(path, body) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-agent-client": "1" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+  return res.json();
+}
+
+async function decideApproval(id, decision) {
+  try { await post(`/api/approvals/${id}`, { decision }); } catch (e) { alert(e.message); }
+}
+
+// 보낼 때 id를 먼저 만든다. 네트워크가 끊겨 다시 보내도 서버가 같은 메시지를 한 번만 처리한다.
+async function sendMessage(text) {
+  const msg = { id: crypto.randomUUID().replace(/-/g, ""), seq: Date.now() * 1000 + (seqCounter++ % 1000), text };
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try { await post("/api/messages", msg); return; }
+    catch (e) {
+      if (attempt === 3) { addMessage({ id: "err_" + msg.id, role: "notice", text: `보내기 실패: ${e.message}. 다시 보내 주세요.`, created: Date.now() }); return; }
+      await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+    }
+  }
+}
+
+$("form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const text = $("input").value.trim();
+  if (!text) return;
+  $("input").value = "";
+  autosize();
+  sendMessage(text);
+});
+$("input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing && window.matchMedia("(pointer: fine)").matches) {
+    e.preventDefault();
+    $("form").requestSubmit();
+  }
+});
+function autosize() { const t = $("input"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 160) + "px"; }
+$("input").addEventListener("input", autosize);
+$("stopBtn").onclick = () => post("/api/stop", {}).catch((e) => alert(e.message));
+
+let screenOpen = false;
+function refreshScreen() { if (screenOpen) $("screenImg").src = `/api/screenshot?t=${Date.now()}`; }
+$("screenBtn").onclick = () => { screenOpen = !screenOpen; $("screen").style.display = screenOpen ? "block" : "none"; refreshScreen(); };
+$("screenImg").onerror = () => { if (screenOpen) $("screenImg").alt = "아직 화면이 없어요"; };
+
+async function loadState() {
+  const res = await fetch("/api/state");
+  if (!res.ok) { document.body.textContent = await res.text(); return; }
+  const s = await res.json();
+  me = s.me; users = s.users;
+  $("title").textContent = `사무실 비서 · ${me.name}`;
+  for (const m of s.messages) addMessage(m);
+  for (const a of s.approvals) renderApproval(a);
+  setStatus(s.task?.status);
+}
+
+function connect() {
+  const es = new EventSource("/api/events");
+  es.onopen = () => loadState();
+  es.onmessage = (e) => {
+    const ev = JSON.parse(e.data);
+    if (ev.type === "message") addMessage(ev);
+    else if (ev.type === "progress") addProgress(ev.text);
+    else if (ev.type === "status") { setStatus(ev.status); if (!["running", "waiting_approval"].includes(ev.status)) endProgress(); }
+    else if (ev.type === "approval") renderApproval(ev);
+    else if (ev.type === "screenshot") refreshScreen();
+  };
+}
+connect();
+</script>
+</body>
+</html>
